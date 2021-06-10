@@ -2714,6 +2714,23 @@
   var createCustomerRefund = function(customerRefund, hays, haysEvent) {
     var refund = hays.fields;
     if(refund.subsidiary.externalId == 'Doctoralia Mexico, S.A. de C.V.') {
+      var invoiceId = getTransactionInternalId(refund.reference.externalid);
+      var invoice_fields = search.lookupFields({
+        type: search.Type.INVOICE,
+        id: invoiceId,
+        columns: ['custbody_ats_correctioninvoice', 'externalid']
+      });
+      var correctionInvoice = invoice_fields.custbody_ats_correctioninvoice;
+      var correctionInvoiceId = isEmpty(correctionInvoice) ? '' : correctionInvoice[0].value;
+      var correctionInvoiceExtId = '';
+      if(!isEmpty(correctionInvoiceId)) {
+        var correctionInvoice_fields = search.lookupFields({
+          type: search.Type.INVOICE,
+          id: correctionInvoiceId,
+          columns: ['externalid']
+        });
+        correctionInvoiceExtId = isEmpty(correctionInvoice_fields.externalid) ? '' : correctionInvoice_fields.externalid[0].value;
+      }
       findExistingRecord({
         externalid: refund.reference.externalid,
         recordtype: search.Type.CUSTOMER_PAYMENT,
@@ -2723,28 +2740,36 @@
         exists: function(payment_rec) {
           // Unapply Payment
           var paymentLineCount = payment_rec.getLineCount('apply');
+          log.error('PASS 0 - paymentLineCount', paymentLineCount);
           for(var i = 0; i < paymentLineCount; i++) {
             var paymentAmount = Number(payment_rec.getSublistValue({
               sublistId: 'apply',
               fieldId: 'amount',
               line: i
             }));
-            if(paymentAmount != Number(refund.total) * -1) continue;
-            payment_rec.selectLine({
-              sublistId: 'apply',
-              line: i
-            })
-            payment_rec.setCurrentSublistValue({
-              sublistId: 'apply',
-              fieldId: 'apply',
-              value: false
-            });
-            payment_rec.commitLine({ sublistId: 'apply' })
-            payment_rec.save({
-              enableSourcing: false,
-              ignoreMandatoryFields: true
-            });
-            break;
+            log.error('1ST CHECK', paymentAmount + ' | ' + (Number(refund.total) * -1));
+            if(paymentAmount != (Number(refund.total) * -1)){
+              payment_rec.selectLine({
+                sublistId: 'apply',
+                line: i
+              })
+              payment_rec.setCurrentSublistValue({
+                sublistId: 'apply',
+                fieldId: 'apply',
+                value: false
+              });
+              payment_rec.commitLine({ sublistId: 'apply' })
+              log.error('payment_rec CHECKER', payment_rec.getSublistValue({ sublistId: 'apply', fieldId: 'apply', line: i}));
+              payment_rec.save({
+                enableSourcing: false,
+                ignoreMandatoryFields: true
+              });
+              log.error('PASS 0.5 - payment_rec save', payment_rec);
+              i = paymentLineCount; //terminator
+            }
+            else{
+              break;
+            }
           }
 
           // Create Customer Refund
@@ -2803,6 +2828,7 @@
             fieldId: 'internalid',
             value: payment_rec.id.toString()
           });
+          log.error('PASS 6 - refundLineToApply', refundLineToApply);
           if(refundLineToApply != -1) {
             customerRefund.selectLine({
               sublistId: 'apply',
@@ -2815,7 +2841,96 @@
             });
             customerRefund.commitLine({ sublistId: 'apply' })
           }
-          return +customerRefund.save();
+          //return +customerRefund.save();
+          +customerRefund.save();
+
+          // Check for Credit Memo on Invoice = EXPERIMENTAL ADDITION - raph
+          if(refund.subsidiary.externalId) {
+            var creditMemoId = getCreditMemoByInvoice(invoiceId);
+            // Create Credit Memo
+            if(isEmpty(creditMemoId)) {
+              var creditMemoSubsidiaryId = payment_rec.getValue('subsidiary');
+              var creditMemoFormId = getCustomFormId(creditMemoSubsidiaryId, 'creditmemo');
+              var creditMemo_rec = record.transform({
+                fromType: record.Type.INVOICE,
+                fromId: invoiceId,
+                toType: record.Type.CREDIT_MEMO,
+                isDynamic: true,
+                defaultValues: {
+                  customform: creditMemoFormId
+                }
+              });
+              creditMemo_rec.setValue('custbody_hays_event', +haysEvent.id);
+              creditMemo_rec.setValue('custbody_ats_source', 2);
+              creditMemo_rec.setValue('trandate', convertHaysDateToNSDate(refund.tranDate));
+
+              var creditMemoLineCount = creditMemo_rec.getLineCount('item');
+              for(var i = 0; i < creditMemoLineCount; i++) {
+                var cmLineBusinessSegment = creditMemo_rec.getSublistValue({
+                  sublistId: 'item',
+                  fieldId: 'class',
+                  line: i
+                });
+                if(!isEmpty(cmLineBusinessSegment)) continue;
+
+                var cmLineItemId = creditMemo_rec.getSublistValue({
+                  sublistId: 'item',
+                  fieldId: 'item',
+                  line: i
+                });
+                var item_fields = search.lookupFields({
+                  type: search.Type.ITEM,
+                  id: cmLineItemId,
+                  columns: ['class', 'itemid']
+                });
+                if(isEmpty(item_fields.class)) throw nsError.create({
+                  message: 'No Business Segment found on Item ' + item_fields.itemid,
+                  name: 'NO_BUSINESS_SEGMENT_ON_ITEM',
+                  notifyOff: false
+                });
+                
+                creditMemo_rec.selectLine({
+                  sublistId: 'item',
+                  line: i
+                });
+                creditMemo_rec.setCurrentSublistValue({
+                  sublistId: 'item',
+                  fieldId: 'class',
+                  value: item_fields.class[0].value
+                });
+                creditMemo_rec.commitLine({ sublistId: 'item' })
+              }
+              creditMemo_rec.save();
+            } else {
+              var creditMemo_rec = record.load({
+                type: record.Type.CREDIT_MEMO,
+                id: creditMemoId,
+                isDynamic: true
+              });
+              var applyLineCount = creditMemo_rec.getLineCount('apply');
+              for(var i = 0; i < applyLineCount; i++) {
+                var tranLineId = creditMemo_rec.getSublistValue({
+                  sublistId: 'apply',
+                  fieldId: 'internalid',
+                  line: i
+                })
+                if(tranLineId != invoiceId) continue;
+
+                creditMemo_rec.selectLine({
+                  sublistId: 'apply',
+                  line: i
+                });
+                creditMemo_rec.setCurrentSublistValue({
+                  sublistId: 'apply',
+                  fieldId: 'apply',
+                  value: true
+                });
+                creditMemo_rec.commitLine({ sublistId: 'apply' })
+                break;
+              }
+              creditMemo_rec.save();
+            }
+          } //END EXPERIMENTAL ADDITION - raph
         },
         doesnotexist: function() {
           log.error('Reference Not Found', "Externalid - " + refund.reference.externalid);
