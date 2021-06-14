@@ -1576,6 +1576,8 @@
             fieldId: 'custbody_ats_pl_vat_date',
             value: convertHaysDateToNSDate(invoice.endDate)
           });
+        } else if(subsidiaryId == SUBSIDIARIES.SPAIN){
+          netsuiteRecord.setValue('memo', 'Prestación de Servicios');
         }
         var currencyId = convertHaysCurrencyToNSCurrency(invoice.currency);
         if (+currencyId > 0) {
@@ -4214,5 +4216,5 @@
     return paisesId;
   }
 
-  
+
 });
