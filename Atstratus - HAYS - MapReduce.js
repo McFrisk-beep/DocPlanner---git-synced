@@ -103,7 +103,7 @@
       id: context.key
     });
     var eventSubsidiary = event.getValue('custrecord_hays_event_subsidiary');
-    if(eventSubsidiary != SUBSIDIARY.DOCPLANNER_ITALY_SRL_CON_SOCIO_UNICO && eventSubsidiary != SUBSIDIARY.DOCTORALIA_MEXICO_SA_DE_CV && eventSubsidiary != SUBSIDIARY.DOCPLANNER_TEKNOLOJI_AAZ && eventSubsidiary != SUBSIDIARY.ZNANYLEKARZ_SP_Z_O_O && eventSubsidiary != SUBSIDIARY.DOCTORALIA_BRASIL_SERVIASOS_ONLINE_E_SOFTWARE_LTDA) return;
+    if(eventSubsidiary != SUBSIDIARY.DOCTORALIA_INTERNET_SL && eventSubsidiary != SUBSIDIARY.DOCPLANNER_ITALY_SRL_CON_SOCIO_UNICO && eventSubsidiary != SUBSIDIARY.DOCTORALIA_MEXICO_SA_DE_CV && eventSubsidiary != SUBSIDIARY.DOCPLANNER_TEKNOLOJI_AAZ && eventSubsidiary != SUBSIDIARY.ZNANYLEKARZ_SP_Z_O_O && eventSubsidiary != SUBSIDIARY.DOCTORALIA_BRASIL_SERVIASOS_ONLINE_E_SOFTWARE_LTDA) return;
     var payload = "" + event.getValue({
       fieldId: 'custrecord_hays_event_payload'
     });
@@ -1186,6 +1186,10 @@
           fieldId: 'custentity_mx_rfc',
           value: customer.tax_number
         });
+        break;
+      case SUBSIDIARIES.SPAIN:
+        var paisesId = getPaisesId(customer.addressbookList.fields.country);
+        netsuiteRecord.setValue('custentity_x_sii_xpais', paisesId);
         break;
       default:
         if (customer.type && customer.type === 'Individual') {
@@ -2341,7 +2345,7 @@
     });
   };
   var createCreditMemo = function(creditMemo, hays, haysEvent, invExtId) {
-    log.error('INSIDE THE CREATECREDITMEMO');
+    //log.error('INSIDE THE CREATECREDITMEMO');
     var credit = hays.fields;
     var invoiceExternalId = isEmpty(hays.reference) ? invExtId : hays.reference.externalid
     findExistingRecord({
@@ -2842,7 +2846,7 @@
             customerRefund.commitLine({ sublistId: 'apply' })
           }
           //return +customerRefund.save();
-          +customerRefund.save();
+          var custRefundID = +customerRefund.save();
 
           // Check for Credit Memo on Invoice = EXPERIMENTAL ADDITION - raph
           if(refund.subsidiary.externalId) {
@@ -3222,7 +3226,7 @@
                   fieldId: 'internalid',
                   line: i
                 })
-                if(tranLineId != invoiceId) continue;
+                if(tranLineId != invoiceId) continue;   //probably causing the issue?
 
                 creditMemo_rec.selectLine({
                   sublistId: 'apply',
@@ -4181,4 +4185,34 @@
     return creditMemoId;
   }
 
+  function getPaisesId(countryName){
+    var paisesId = '';
+    var searchObj = search.create({ type: 'customrecord_xpaises'});
+    var columns = [];
+    columns.push(search.createColumn({
+      name: 'internalid',
+      label: 'Internal ID'
+    }));
+    searchObj.columns = columns;
+    var filters = [];
+    filters.push(search.createFilter({
+      name: 'isinactive',
+      operator: 'is',
+      values: 'F'
+    }));
+    filters.push(search.createFilter({
+      name: 'formulatext',
+      formula: '{custrecord_xpaisespaisns}',
+      operator: 'is',
+      values: countryName
+    }));
+    searchObj.filters = filters;
+
+    results = searchObj.run().getRange(0, 1);
+    if(!isEmpty(results)) paisesId = results[0].id;
+
+    return paisesId;
+  }
+
+  
 });
