@@ -47,7 +47,7 @@ function(record, search, runtime, https, config) {
             ]
         });
         var searchResultCount = customrecord_hays_eventSearchObj.runPaged().count;
-        log.debug("customrecord_hays_eventSearchObj result count",searchResultCount);
+        log.audit("customrecord_hays_eventSearchObj result count",searchResultCount);
 
         return customrecord_hays_eventSearchObj;
     }
@@ -59,10 +59,92 @@ function(record, search, runtime, https, config) {
      * @since 2015.1
      */
     function map(context) {
-        var searchResult = JSON.parse(context.value);
-        var internalid = searchResult.values['internalid'].value;
-
-        //TODO
+        try{
+            var searchResult = JSON.parse(context.value);
+            //log.audit('searchResult', searchResult);
+            var internalid = searchResult.id;
+            //log.audit('internalid', internalid);
+    
+            //Load the HAYS Event based on the internal ID of the search
+            var haysEvent = record.load({
+                type: 'customrecord_hays_event',
+                id: internalid,
+            });
+    
+            //Parse the payload to JSON
+            var haysJSON = haysEvent.getValue({ fieldId: 'custrecord_hays_event_payload'});
+            haysJSON = JSON.parse(haysJSON);
+            var customerExtId = '';
+    
+            //Try and find the 'customer' recordtype from the JSON values
+            //The haysJSON variable will be an array of an object
+            for(var x = 0; x < haysJSON.length; x++){
+                if(haysJSON[x].recordtype == 'customer' && haysJSON[x].externalid){
+                    customerExtId = haysJSON[x].externalid;
+                    
+                    //There's probably one customer only. So once done, terminate the loop.
+                    x = haysJSON.length;
+                }
+            }
+            log.audit('customerExtId being processed', customerExtId);
+    
+            //Now that we have the customer external ID, move on to next search.
+            //This time, we try and find the entity with the referenced external ID
+            var duplicateCustomer;
+            var duplicateCustomerExtId;
+            var addedText;
+            var customerSearchObj = search.create({
+                type: "customer",
+                filters:
+                [
+                   ["externalid","anyof",customerExtId]
+                ],
+                columns:
+                [
+                   search.createColumn({name: "externalid", label: "External ID"}),
+                   search.createColumn({
+                      name: "entityid",
+                      sort: search.Sort.ASC,
+                      label: "ID"
+                   }),
+                   search.createColumn({name: "altname", label: "Name"}),
+                   search.createColumn({
+                      name: "formulatext",
+                      formula: "'_migrated'",
+                      label: "Formula (Text)"
+                   }),
+                   search.createColumn({name: "internalid", label: "Internal ID"})
+                ]
+            });
+            customerSearchObj.run().each(function(result){
+                //log.audit('Found the duplicate customer!', result.getValue({ name: 'internalid'}));
+                duplicateCustomer = result.getValue({ name: 'internalid'});
+                duplicateCustomerExtId = result.getValue({ name: 'externalid'});
+                addedText = result.getValue({ name: 'formulatext'});
+                //log.audit('Formula text', addedText);
+                return false;
+    
+                //Future development concerns: What if there's two or more with the same external ID but already have modified headers
+                //Is such a thing possible?
+            });
+    
+            //Change the external ID of the old one, and add the formula text.
+            duplicateCustomer = record.submitFields({
+                type: record.Type.CUSTOMER,
+                id: duplicateCustomer,
+                values: {
+                    externalid: duplicateCustomerExtId + addedText
+                },
+                options: {
+                    enableSourcing: false,
+                    ignoreMandatoryFields: true
+                }
+            });
+            log.audit('duplicateCustomer successfully saved!', duplicateCustomer);
+        }
+        catch(e){
+            log.error('Error on MAP', e);
+        }
     }
 
     /**
